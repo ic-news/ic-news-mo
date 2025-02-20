@@ -10,6 +10,9 @@ import Array "mo:base/Array";
 import Timer "mo:base/Timer";
 import Cycles "mo:base/ExperimentalCycles";
 import Error "mo:base/Error";
+import Debug "mo:base/Debug";
+import Time "mo:base/Time";
+import Int "mo:base/Int";
 import StableTrieMap "mo:StableTrieMap";
 import Types "/types/Types";
 import Archive "Archive";
@@ -26,82 +29,11 @@ actor class News() = this{
     stable var _index : Nat = 0;
     let DEPLOY_CANISTER_CYCLE = 300_000_000_000;
 
-    
-    private func _save_to_archive() : async () {
-        let total = _news_buffer.size();
-        if(total > 12000){
-            let news_list = Buffer.toArray(_news_buffer);
-            //sort news_list by created_at asc
-            let sortedArray = Array.sort(news_list, func(a: Types.News, b: Types.News) : Order.Order {
-                Nat.compare(a.created_at, b.created_at)
-            });
-            let _append_array = Array.subArray(sortedArray,0,1999);
-            let _remain_array = Array.subArray(sortedArray,2000,Nat.sub(total,1));
-            _news_buffer := Buffer.fromArray<Types.News>(_remain_array);
+    private var last_error_message = "";
+    private var task_status = false;
 
-            //get last archive from archives
-            var last_archive : Types.ArchiveInterface = actor("aaaaa-aa");
-            var is_deployed = false;
-            if(archives.size() > 0){
-                last_archive := archives[archives.size() - 1].canister;
-                let remaining_capacity = await last_archive.remaining_capacity();
-                switch(remaining_capacity){
-                    case(#ok(remaining_capacity)){
-                            if(remaining_capacity <= 100*1024*1024){
-                                let archive = await deploy_archive_canister();
-                                last_archive := archive;
-                                is_deployed := true;
-                            };
-                    };
-                    case(#err(_err)){
-                        //ignore
-                    };
-                };
-            }else{
-                //deploy new archive
-                let archive = await deploy_archive_canister();
-                last_archive := archive;
-                is_deployed := true;
-            };
-            let _ = await last_archive.append_news(_append_array);
-            if(is_deployed){
-                //append new archive to archives
-                let archive : Types.ArchiveData = { 
-                    canister = last_archive;
-                    stored_news = total;
-                    start = _index;
-                    end = _index + 1999;
-                };
-                archives := Array.append(archives, [archive]);
-            }else{
-                //update last archive
-                let archive : Types.ArchiveData = { 
-                    canister = last_archive;
-                    stored_news = total;
-                    start = _index;
-                    end = _index + 1999;
-                };
-
-                let new_archive = {
-                    archive with
-                    start = _index;
-                };
-
-                let new_archives = Array.append(Array.subArray(archives, 0, Nat.sub(archives.size(), 1)), [archive]);
-                archives := new_archives;
-            };
-        };
-    };
-
-    private func deploy_archive_canister() : async Types.ArchiveInterface {
-        let cycles_balance = Cycles.balance();
-        if (cycles_balance < DEPLOY_CANISTER_CYCLE) {
-            throw Error.reject("Cycle: Insufficient cycles balance");
-        };
-        Cycles.add<system>(DEPLOY_CANISTER_CYCLE);
-        let archive_canister = await Archive.Archive();
-        let archive_canister_id = Principal.fromActor(archive_canister);
-        return actor(Principal.toText(archive_canister_id));
+    public query func get_task_status(): async  Result.Result<(Bool, Text), Types.Error> {
+        return #ok((task_status, last_error_message));
     };
 
     public query func get_archives(): async  Result.Result<[Types.ArchiveData], Types.Error> {
@@ -273,6 +205,117 @@ actor class News() = this{
             };
         };
         return #ok(Buffer.toArray(buffer));
+    };
+
+    private func _save_to_archive() : async () {
+        if(task_status){
+            return;
+        };
+        task_status := true;
+        try{
+            let total = _news_buffer.size();
+            if(total > 12000){
+                let news_list = Buffer.toArray(_news_buffer);
+                //sort news_list by created_at asc
+                let sortedArray = Array.sort(news_list, func(a: Types.News, b: Types.News) : Order.Order {
+                    Nat.compare(a.created_at, b.created_at)
+                });
+                let _append_array = Array.subArray(sortedArray,0,1999);
+                let _remain_array = Array.subArray(sortedArray,2000,Nat.sub(total,1));
+                _news_buffer := Buffer.fromArray<Types.News>(_remain_array);
+
+                //get last archive from archives
+                var last_archive : Types.ArchiveInterface = actor("aaaaa-aa");
+                var archive_data : Types.ArchiveData = { 
+                        canister = last_archive;
+                        stored_news = 0;
+                        start = 0;
+                        end = 0;
+                };
+                var is_deployed = false;
+                if(archives.size() > 0){
+                    let last_archive_data = archives[archives.size() - 1];
+                    last_archive := last_archive_data.canister;
+                    let remaining_capacity = await last_archive.remaining_capacity();
+                    switch(remaining_capacity){
+                        case(#ok(remaining_capacity)){
+                                if(remaining_capacity <= 100*1024*1024){
+                                    let archive_canister = await deploy_archive_canister();
+                                    last_archive := archive_canister;
+                                    is_deployed := true;
+                                    archive_data := {
+                                        archive_data with
+                                        canister = archive_canister;
+                                        start = _append_array[0].index;
+                                    };
+                                }else{
+                                    archive_data := last_archive_data;
+                                }
+                        };
+                        case(#err(err)){
+                            last_error_message := "Get remaining capacity error: " # debug_show(err) #", at " #Int.toText(Time.now());
+                            Debug.print(last_error_message);
+                            return;
+                        };
+                    };
+                }else{
+                    //deploy new archive
+                    let archive_canister = await deploy_archive_canister();
+                    last_archive := archive_canister;
+                    is_deployed := true;
+                    archive_data := {
+                        archive_data with
+                        canister = archive_canister;
+                        start = _append_array[0].index;
+                    };
+                };
+                switch(await last_archive.append_news(_append_array)){
+                    case(#ok(_)){
+                        if(is_deployed){
+                            //append new archive to archives
+                            archive_data := {
+                                archive_data with
+                                stored_news = _append_array.size();
+                                end = _append_array[Nat.sub(_append_array.size(), 1)].index;
+                            };
+                            archives := Array.append(archives, [archive_data]);
+                        }else{
+                            //update last archive
+                            archive_data := {
+                                archive_data with
+                                stored_news = archive_data.stored_news + _append_array.size();
+                                end = _append_array[Nat.sub(_append_array.size(), 1)].index;
+                            };
+                            if(archives.size() > 1){
+                                let new_archives = Array.append(Array.subArray(archives, 0, Nat.sub(archives.size(), 1)), [archive_data]);
+                                archives := new_archives;
+                            }else{
+                                archives := [archive_data];
+                            };
+                        };
+                    };
+                    case(#err(err)){
+                        last_error_message := "Append news to archive error: " # debug_show(err) #", at " #Int.toText(Time.now());
+                        Debug.print(last_error_message);
+                    };
+                };
+            };
+        }catch(err){
+            last_error_message := "Save to archive throw exception: " # debug_show(Error.message(err)) #", at " #Int.toText(Time.now());
+            Debug.print(last_error_message);
+        };
+        task_status := false;
+    };
+
+    private func deploy_archive_canister() : async Types.ArchiveInterface {
+        let cycles_balance = Cycles.balance();
+        if (cycles_balance < DEPLOY_CANISTER_CYCLE) {
+            throw Error.reject("Cycle: Insufficient cycles balance");
+        };
+        Cycles.add<system>(DEPLOY_CANISTER_CYCLE);
+        let archive_canister = await Archive.Archive();
+        let archive_canister_id = Principal.fromActor(archive_canister);
+        return actor(Principal.toText(archive_canister_id));
     };
 
     system func preupgrade() {
