@@ -1,0 +1,20 @@
+{
+  "canisters": {
+    "news": {
+      "main": "src/IcNews.mo",
+      "type": "motoko"
+    },
+    "index": {
+      "main": "src/IcNewsIndex.mo",
+      "type": "motoko"
+    }
+  },
+  "dfx": "0.20.0", 
+  "defaults": {
+    "build": {
+      "packtool": "vessel sources"
+    }
+  },
+  "output_env_file": ".env",
+  "version": 1
+}
