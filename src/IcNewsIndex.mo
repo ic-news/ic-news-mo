@@ -61,7 +61,7 @@ actor class NewsIndex(news_canister_id: Principal) = this{
         switch(news_index){
             case null {
                 //query from news canister
-                let news_canister : Types.NewsInterface = actor("aaaaa-aa");
+                let news_canister : Types.NewsInterface = actor(Principal.toText(news_canister_id));
                 let news = await news_canister.get_news_by_hash(news_hash);
                 return news;
             };

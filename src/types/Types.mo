@@ -10,10 +10,8 @@ module {
 
     public type Error = {
         #CommonError;
-        #InsufficientFunds;
         #InternalError : Text;
         #NotController;
-        #NotAdmin;
         #InvalidRequest;
     };
 
@@ -30,36 +28,44 @@ module {
     };
 
     public type Provider = {
-        principal: Principal;
+        pid: Principal;
+        alias: Text;
+    };
+
+    public type Category = {
         name: Text;
+        metadata: ?Value;
     };
 
-    public type NewsArg = {
-        id: Text;
-        hash: Text;
-        title: Text;
-        url: Text;
-        description: Text;
-        metadata: Value;
-        category: Text;
-        tags: [Text];
-        created_at: Nat;
+    public type Tag = {
+        name: Text;
+        metadata: ?Value;
     };
 
-    public type NewsArgs = [NewsArg];
+    public type AddCategoryArgs = {
+        args: [Category];
+    };
+
+    public type AddTagArgs = {
+        args: [Tag];
+    };
+
 
     public type News = {
         index: Nat;
-        provider: Provider;
-        id: Text;
+        provider: Value;
+        id: ?Text;
         hash: Text;
         title: Text;
-        url: Text;
         description: Text;
         metadata: Value;
         category: Text;
         tags: [Text];
         created_at: Nat;
+    };
+
+    public type AddNewsArgs = {
+        args: [News];
     };
 
     public type NewsRequest = {
@@ -95,7 +101,7 @@ module {
 
 
     public type ArchiveInterface = actor {
-        append_news : shared ([NewsArg]) -> async Result.Result<Bool, Error>;
+        append_news : shared ([News]) -> async Result.Result<Bool, Error>;
         total_news : query () -> async Result.Result<Nat, Error>;
         query_news : query (NewsRequest) -> async NewsRange;
         remaining_capacity : query () -> async Result.Result<Nat, Error>;
@@ -103,8 +109,12 @@ module {
     };
 
     public type NewsInterface = actor {
-        add_news : shared (NewsArg) -> async Result.Result<Bool, Error>;
+        add_categories : shared (AddCategoryArgs) -> async Result.Result<Bool, Error>;
+        add_tags : shared (AddTagArgs) -> async Result.Result<Bool, Error>;
+        add_news : shared (AddNewsArgs) -> async Result.Result<Bool, Error>;
         get_archives : query () -> async Result.Result<[ArchiveData], Error>;
+        get_categories : query () -> async Result.Result<[Category], Error>;
+        get_tags : query () -> async Result.Result<[Tag], Error>;
         query_news : query (NewsRequest) -> async NewsResponse;
         query_latest_news : query (Nat) -> async Result.Result<[News], Error>;
         get_news_by_hash : query (Text) -> async Result.Result<News, Error>;
@@ -112,18 +122,4 @@ module {
         get_news_by_time : query (Nat, Nat) -> async Result.Result<[News], Error>;
     };
 
-    // public type IndexInterface = actor {
-    //     register_index : shared (Text) -> async Result.Result<Bool, Error>;
-    // };
-
-    // public type GovernanceInterface = actor {
-    //     get_storage_canister_id : query (month: Nat) -> async Result.Result<Principal, Error>; 
-    //     get_all_storage : query () -> async Result.Result<[(Nat, StorageInfo)], Error>;
-    // };
-
-    // public type RootInterface = actor {
-    //     add_storage_canister : shared (canister_id: Principal, month: Nat) -> async Result.Result<Bool, Error>;
-    //     add_index_canister : shared (canister_id: Principal, name: Text) -> async Result.Result<Bool, Error>;
-    // };
-    
 }

@@ -19,56 +19,109 @@ import Archive "Archive";
 
 actor class News() = this{
 
-    stable let provider_store = StableTrieMap.new<Principal, Text>();
+    stable let _provider_store = StableTrieMap.new<Principal, Text>();
 
     stable var _news_array : [Types.News] = [];
     var _news_buffer = Buffer.Buffer<Types.News>(0);
 
-    stable var archives : [Types.ArchiveData] = [];
+    stable var _category_array : [Types.Category] = [];
+
+    stable var _tag_array : [Types.Tag] = [];
+
+    stable var _archives : [Types.ArchiveData] = [];
 
     stable var _index : Nat = 0;
-    let DEPLOY_CANISTER_CYCLE = 300_000_000_000;
+    let DEPLOY_CANISTER_CYCLE = 3_000_000_000_000;
 
-    private var last_error_message = "";
-    private var task_status = false;
+    private var _last_error_message = "";
+    private var _task_status = false;
 
     public query func get_task_status(): async  Result.Result<(Bool, Text), Types.Error> {
-        return #ok((task_status, last_error_message));
+        return #ok((_task_status, _last_error_message));
     };
 
     public query func get_archives(): async  Result.Result<[Types.ArchiveData], Types.Error> {
-        return #ok(archives);
+        return #ok(_archives);
     };
 
-    public shared(msg) func add_provider(provider: Types.Provider): async  Result.Result<Bool, Types.Error> {
+    public query func get_providers(): async  Result.Result<[(Principal,Text)], Types.Error> {
+        let providers = StableTrieMap.entries(_provider_store);
+        let provider_list = Iter.toArray(providers);
+        return #ok(provider_list);
+    };
+
+    public query func get_categories(): async  Result.Result<[Types.Category], Types.Error> {
+        return #ok(_category_array);
+    };
+
+    public query func get_tags(): async  Result.Result<[Types.Tag], Types.Error> {
+        return #ok(_tag_array);
+    };
+
+    public shared(msg) func add_provider(pid : Principal, alias : Text): async  Result.Result<Bool, Types.Error> {
         if(Principal.isController(msg.caller)){
-            StableTrieMap.put(provider_store, Principal.equal, Principal.hash, provider.principal, provider.name);
+            StableTrieMap.put(_provider_store, Principal.equal, Principal.hash, pid, alias);
             return #ok(true);
         } else {
             return #err(#InternalError("Access denied"));
         };
     };
 
-    public query func get_providers(): async  Result.Result<[(Principal,Text)], Types.Error> {
-        let providers = StableTrieMap.entries(provider_store);
-        let provider_list = Iter.toArray(providers);
-        return #ok(provider_list);
-    };
-
-    public shared(msg) func add_news(news: Types.NewsArgs): async  Result.Result<Bool, Types.Error> {
-        let provider = StableTrieMap.get(provider_store, Principal.equal, Principal.hash, msg.caller);
+    public shared(msg) func add_categories(categories: Types.AddCategoryArgs): async  Result.Result<Bool, Types.Error> {
+        let provider = StableTrieMap.get(_provider_store, Principal.equal, Principal.hash, msg.caller);
         switch(provider){
             case null {
                 return #err(#InternalError("Provider not found"));
             };
             case (?provider) {
-                for(news_arg in news.vals()){
+                for(category in categories.args.vals()){
+                    switch(Array.find<Types.Category>(_category_array, func(a: Types.Category): Bool {
+                        a.name == category.name
+                    })){
+                        case null {
+                            _category_array := Array.append(_category_array, [category]);
+                        };
+                        case (?_existing_category) {};
+                    };
+                };
+            };
+        };
+        return #ok(true);
+    };
+
+    public shared(msg) func add_tags(tags: Types.AddTagArgs): async  Result.Result<Bool, Types.Error> {
+        let provider = StableTrieMap.get(_provider_store, Principal.equal, Principal.hash, msg.caller);
+        switch(provider){
+            case null {
+                return #err(#InternalError("Provider not found"));
+            };
+            case (?provider) {
+                for(tag in tags.args.vals()){
+                    switch(Array.find<Types.Tag>(_tag_array, func(a: Types.Tag): Bool {
+                        a.name == tag.name
+                    })){
+                        case null {
+                            _tag_array := Array.append(_tag_array, [tag]);
+                        };
+                        case (?_existing_tag) {};
+                    };
+                };
+            };
+        };
+        return #ok(true);
+    };
+
+    public shared(msg) func add_news(news: Types.AddNewsArgs): async  Result.Result<Bool, Types.Error> {
+        let provider = StableTrieMap.get(_provider_store, Principal.equal, Principal.hash, msg.caller);
+        switch(provider){
+            case null {
+                return #err(#InternalError("Provider not found"));
+            };
+            case (?provider) {
+                for(news_arg in news.args.vals()){
                     let news_item : Types.News = {news_arg with
                         index = _index;
-                        provider = {
-                            principal = msg.caller;
-                            name = provider;
-                        };
+                        provider = #Map([("pid", #Principal(msg.caller)), ("alias", #Text(provider))]);
                     };
                     _news_buffer.add(news_item);
                     _index += 1;
@@ -102,8 +155,8 @@ actor class News() = this{
             req_length := req.length - news_in_canister.size();
         };
 
-        let archive_news = Buffer.Buffer<Types.ArchivedNews>(archives.size());
-        let tmp_archives = archives;
+        let archive_news = Buffer.Buffer<Types.ArchivedNews>(_archives.size());
+        let tmp_archives = _archives;
         var first_archive = true;
         var tmp_archives_length = 0;
         for (archive in tmp_archives.vals()) {
@@ -129,16 +182,20 @@ actor class News() = this{
             };
         };
         {
-            length = total_news();
+            length = _total_news();
             first_index;
             news = news_in_canister;
             archived_news = Buffer.toArray(archive_news);
         };
     };
 
-    private func total_news() : Nat {
+    public query func total_news() : async  Result.Result<Nat, Types.Error> {
+        return #ok(_total_news());
+    };
+
+    private func _total_news() : Nat {
         var total = 0;
-        for(archive in archives.vals()){
+        for(archive in _archives.vals()){
             total += archive.stored_news;
         };
         return total + _news_buffer.size();
@@ -146,9 +203,10 @@ actor class News() = this{
 
     public query func query_latest_news(size: Nat): async  Result.Result<[Types.News], Types.Error> {
         let news_list = Buffer.toArray(_news_buffer);
-        let sortedArray = Array.sort(news_list, func(a: Types.News, b: Types.News) : Order.Order {
-            Nat.compare(a.created_at, b.created_at)
+        var sortedArray = Array.sort(news_list, func(a: Types.News, b: Types.News) : Order.Order {
+            Nat.compare(a.index, b.index)
         });
+        sortedArray := Array.reverse(sortedArray);
         let buffer = Buffer.Buffer<Types.News>(size);
         for(news_item in sortedArray.vals()){
             if(buffer.size() < size){
@@ -176,7 +234,7 @@ actor class News() = this{
             };
         };
         //query from archives
-        for(archive in archives.vals()){
+        for(archive in _archives.vals()){
             let news = await archive.canister.get_news(index);
             switch(news){
                 case(#ok(news)){
@@ -208,10 +266,10 @@ actor class News() = this{
     };
 
     private func _save_to_archive() : async () {
-        if(task_status){
+        if(_task_status){
             return;
         };
-        task_status := true;
+        _task_status := true;
         try{
             let total = _news_buffer.size();
             if(total > 12000){
@@ -233,14 +291,14 @@ actor class News() = this{
                         end = 0;
                 };
                 var is_deployed = false;
-                if(archives.size() > 0){
-                    let last_archive_data = archives[archives.size() - 1];
+                if(_archives.size() > 0){
+                    let last_archive_data = _archives[_archives.size() - 1];
                     last_archive := last_archive_data.canister;
                     let remaining_capacity = await last_archive.remaining_capacity();
                     switch(remaining_capacity){
                         case(#ok(remaining_capacity)){
                                 if(remaining_capacity <= 100*1024*1024){
-                                    let archive_canister = await deploy_archive_canister();
+                                    let archive_canister = await _deploy_archive_canister();
                                     last_archive := archive_canister;
                                     is_deployed := true;
                                     archive_data := {
@@ -253,14 +311,14 @@ actor class News() = this{
                                 }
                         };
                         case(#err(err)){
-                            last_error_message := "Get remaining capacity error: " # debug_show(err) #", at " #Int.toText(Time.now());
-                            Debug.print(last_error_message);
+                            _last_error_message := "Get remaining capacity error: " # debug_show(err) #", at " #Int.toText(Time.now());
+                            Debug.print(_last_error_message);
                             return;
                         };
                     };
                 }else{
                     //deploy new archive
-                    let archive_canister = await deploy_archive_canister();
+                    let archive_canister = await _deploy_archive_canister();
                     last_archive := archive_canister;
                     is_deployed := true;
                     archive_data := {
@@ -278,7 +336,7 @@ actor class News() = this{
                                 stored_news = _append_array.size();
                                 end = _append_array[Nat.sub(_append_array.size(), 1)].index;
                             };
-                            archives := Array.append(archives, [archive_data]);
+                            _archives := Array.append(_archives, [archive_data]);
                         }else{
                             //update last archive
                             archive_data := {
@@ -286,28 +344,28 @@ actor class News() = this{
                                 stored_news = archive_data.stored_news + _append_array.size();
                                 end = _append_array[Nat.sub(_append_array.size(), 1)].index;
                             };
-                            if(archives.size() > 1){
-                                let new_archives = Array.append(Array.subArray(archives, 0, Nat.sub(archives.size(), 1)), [archive_data]);
-                                archives := new_archives;
+                            if(_archives.size() > 1){
+                                let new_archives = Array.append(Array.subArray(_archives, 0, Nat.sub(_archives.size(), 1)), [archive_data]);
+                                _archives := new_archives;
                             }else{
-                                archives := [archive_data];
+                                _archives := [archive_data];
                             };
                         };
                     };
                     case(#err(err)){
-                        last_error_message := "Append news to archive error: " # debug_show(err) #", at " #Int.toText(Time.now());
-                        Debug.print(last_error_message);
+                        _last_error_message := "Append news to archive error: " # debug_show(err) #", at " #Int.toText(Time.now());
+                        Debug.print(_last_error_message);
                     };
                 };
             };
         }catch(err){
-            last_error_message := "Save to archive throw exception: " # debug_show(Error.message(err)) #", at " #Int.toText(Time.now());
-            Debug.print(last_error_message);
+            _last_error_message := "Save to archive throw exception: " # debug_show(Error.message(err)) #", at " #Int.toText(Time.now());
+            Debug.print(_last_error_message);
         };
-        task_status := false;
+        _task_status := false;
     };
 
-    private func deploy_archive_canister() : async Types.ArchiveInterface {
+    private func _deploy_archive_canister() : async Types.ArchiveInterface {
         let cycles_balance = Cycles.balance();
         if (cycles_balance < DEPLOY_CANISTER_CYCLE) {
             throw Error.reject("Cycle: Insufficient cycles balance");
