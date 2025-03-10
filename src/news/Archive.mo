@@ -11,8 +11,8 @@ import Buffer "mo:base/Buffer";
 import Principal "mo:base/Principal";
 import Itertools "mo:itertools/Iter";
 import StableTrieMap "mo:StableTrieMap";
-import Types "/types/Types";
-import Utils "/common/Utils";
+import Types "../types/NewsTypes";
+import Utils "../common/Utils";
 
 shared (initMsg) actor class Archive() = this {
     type MemoryBlock = {

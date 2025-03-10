@@ -1,18 +1,26 @@
 {
   "canisters": {
     "news": {
-      "main": "src/IcNews.mo",
+      "main": "src/news/IcNews.mo",
       "type": "motoko"
     },
     "index": {
-      "main": "src/IcNewsIndex.mo",
+      "main": "src/news/IcNewsIndex.mo",
+      "type": "motoko"
+    },
+    "full-news": {
+      "main": "src/full-news/IcFullNews.mo",
+      "type": "motoko"
+    },
+    "full-index": {
+      "main": "src/full-news/IcNewsIndex.mo",
       "type": "motoko"
     }
   },
   "dfx": "0.20.0", 
   "defaults": {
     "build": {
-      "packtool": "vessel sources"
+      "packtool": "mops sources"
     }
   },
   "output_env_file": ".env",

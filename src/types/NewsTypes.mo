@@ -12,7 +12,7 @@ module {
         #CommonError;
         #InternalError : Text;
         #NotController;
-        #InvalidRequest;
+        #InvalidRequest : Text;
     };
 
     public type Value = {
@@ -25,6 +25,24 @@ module {
         #Array : [Value];
         #Map : [(Text, Value)];
         #Principal : Principal;
+    };
+
+    public type Page<T> = {
+        totalElements: Nat;
+        content: [T];
+        offset: Nat;
+        limit: Nat;
+    };
+
+    public type WebSocketValue = {
+        #Common : Value;
+        #LatestNews : [News];
+        #NewsByIndex : News;
+        #NewsByHash : News;
+        #NewsByTime : [News];
+        #Categories : [Category];
+        #Tags : [Tag];
+        #Archives : [ArchiveData];
     };
 
     public type Provider = {
@@ -83,22 +101,19 @@ module {
     public type ArchivedNews = {
         start : Nat;
         length : Nat;
-        callback : QueryArchivedNewsFn;
+        callback : shared query (NewsRequest) -> async NewsRange;
     };
-
+    
     public type NewsRange = {
         news : [News];
     };
 
-     public type ArchiveData = {
+    public type ArchiveData = {
         canister : ArchiveInterface;
         stored_news : Nat;
         start : Nat;
         end : Nat;
     };
-
-    public type QueryArchivedNewsFn = shared query (NewsRequest) -> async NewsRange;
-
 
     public type ArchiveInterface = actor {
         append_news : shared ([News]) -> async Result.Result<Bool, Error>;
@@ -120,6 +135,8 @@ module {
         get_news_by_hash : query (Text) -> async Result.Result<News, Error>;
         get_news_by_index : query (Nat) -> async Result.Result<News, Error>;
         get_news_by_time : query (Nat, Nat) -> async Result.Result<[News], Error>;
+        query_news_by_category : query (Text, Nat, Nat) -> async Result.Result<Page<News>, Error>;
+        query_news_by_tag : query (Text, Nat, Nat) -> async Result.Result<Page<News>, Error>;
     };
 
 }

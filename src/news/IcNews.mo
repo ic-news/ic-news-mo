@@ -13,9 +13,16 @@ import Error "mo:base/Error";
 import Debug "mo:base/Debug";
 import Time "mo:base/Time";
 import Int "mo:base/Int";
+import TrieSet "mo:base/TrieSet";
+import Nat64 "mo:base/Nat64";
 import StableTrieMap "mo:StableTrieMap";
-import Types "/types/Types";
+import Types "../types/NewsTypes";
 import Archive "Archive";
+import Utils "../common/Utils";
+
+import IcWebSocketCdk "mo:ic-websocket-cdk";
+import IcWebSocketCdkState "mo:ic-websocket-cdk/State";
+import IcWebSocketCdkTypes "mo:ic-websocket-cdk/Types";
 
 actor class News() = this{
 
@@ -118,14 +125,23 @@ actor class News() = this{
                 return #err(#InternalError("Provider not found"));
             };
             case (?provider) {
+                let buffer = Buffer.Buffer<Types.News>(news.args.size());
                 for(news_arg in news.args.vals()){
                     let news_item : Types.News = {news_arg with
                         index = _index;
                         provider = #Map([("pid", #Principal(msg.caller)), ("alias", #Text(provider))]);
                     };
                     _news_buffer.add(news_item);
+                    buffer.add(news_item);
                     _index += 1;
                 };
+                ignore send_to_all({
+                        //topic is latest news
+                        topic = "latest_news";
+                        args = [];
+                        result = #LatestNews(Buffer.toArray(buffer));
+                        timestamp = Nat64.fromIntWrap(Time.now());
+                    });
             };
         };
         return #ok(true);
@@ -202,6 +218,54 @@ actor class News() = this{
     };
 
     public query func query_latest_news(size: Nat): async  Result.Result<[Types.News], Types.Error> {
+        return #ok(_query_latest_news(size));
+    };
+
+    public query func query_news_by_category(category: Text, offset: Nat, limit: Nat): async  Result.Result<Types.Page<Types.News>, Types.Error> {
+        return #ok(_query_news_by_category(category, offset, limit));
+    };
+
+    public query func query_news_by_tag(tag: Text, offset: Nat, limit: Nat): async  Result.Result<Types.Page<Types.News>, Types.Error> {
+        return #ok(_query_news_by_tag(tag, offset, limit));
+    };
+
+    private func _query_news_by_category(category: Text, offset: Nat, limit: Nat):Types.Page<Types.News> {
+        let news_list = Buffer.toArray(_news_buffer);
+        //filter news by category
+        let filteredArray = Array.filter(news_list, func(a: Types.News) : Bool {
+            a.category == category
+        });
+        var sortedArray = Array.sort(filteredArray, func(a: Types.News, b: Types.News) : Order.Order {
+            Nat.compare(b.index, a.index)
+        });
+        let result = Utils.arrayRange(sortedArray, offset, limit);
+        return {
+            content = result;
+            limit = limit;
+            offset = offset;
+            totalElements = filteredArray.size();
+        };
+    };
+
+    private func _query_news_by_tag(tag: Text, offset: Nat, limit: Nat):Types.Page<Types.News> {
+        let news_list = Buffer.toArray(_news_buffer);
+        //filter news by tag
+        let filteredArray = Array.filter(news_list, func(a: Types.News) : Bool {
+            Utils.arrayContains(a.tags, tag, Text.equal)
+        });
+        var sortedArray = Array.sort(filteredArray, func(a: Types.News, b: Types.News) : Order.Order {
+            Nat.compare(b.index, a.index)
+        });
+        let result = Utils.arrayRange(sortedArray, offset, limit);
+        return {
+            content = result;
+            limit = limit;
+            offset = offset;
+            totalElements = filteredArray.size();
+        };
+    };
+
+    private func _query_latest_news(size: Nat):[Types.News] {
         let news_list = Buffer.toArray(_news_buffer);
         var sortedArray = Array.sort(news_list, func(a: Types.News, b: Types.News) : Order.Order {
             Nat.compare(a.index, b.index)
@@ -213,7 +277,7 @@ actor class News() = this{
                 buffer.add(news_item);
             };
         };
-        return #ok(Buffer.toArray(buffer));
+        return Buffer.toArray(buffer);
     };
 
     public query func get_news_by_hash(hash: Text): async  Result.Result<Types.News, Types.Error> {
@@ -264,6 +328,151 @@ actor class News() = this{
         };
         return #ok(Buffer.toArray(buffer));
     };
+
+
+    //websocket
+    let params = IcWebSocketCdkTypes.WsInitParams(null, null);
+
+    let ws_state = IcWebSocketCdkState.IcWebSocketState(params);
+
+    type ClientPrincipal = IcWebSocketCdk.ClientPrincipal;
+
+    type AppMessage = {
+        topic : Text;
+        args : [Text];
+        result : Types.WebSocketValue;
+        timestamp : Nat64;
+    };
+
+    var clients_connected : TrieSet.Set<ClientPrincipal> = TrieSet.empty();
+
+    func on_open(args : IcWebSocketCdk.OnOpenCallbackArgs) : async () {
+        Debug.print("On open called for client: " # debug_show (args));
+        clients_connected := TrieSet.put(clients_connected, args.client_principal, Principal.hash(args.client_principal), Principal.equal);
+        let msg : AppMessage = {
+            topic = "connect";
+            args = [];
+            result = #Common(#Bool(true));
+            timestamp = Nat64.fromIntWrap(Time.now());
+        };
+        await send_app_message(args.client_principal, msg);
+    };
+
+    func on_message(args : IcWebSocketCdk.OnMessageCallbackArgs) : async () {
+        Debug.print("On message called for client: " # debug_show (args));
+        let app_msg : ?AppMessage = from_candid (args.message);
+        switch (app_msg) {
+            case (null) {};
+            case (?msg) {
+                //check topic,return different message for different topic
+                switch (msg.topic) {
+                    case "get_latest_news" {
+                        let new_msg : AppMessage = {
+                            topic = msg.topic;
+                            args = msg.args;
+                            result = #LatestNews(_query_latest_news(2));
+                            timestamp = Nat64.fromIntWrap(Time.now());
+                        };
+                        await send_app_message(args.client_principal, new_msg);
+                    };
+                    case "get_archives" {
+                        let new_msg : AppMessage = {
+                            topic = msg.topic;
+                            args = msg.args;
+                            result = #Archives(_archives);
+                            timestamp = Nat64.fromIntWrap(Time.now());
+                        };
+                        await send_app_message(args.client_principal, new_msg);
+                    };
+                    case _{};
+                };
+            };
+        };
+    };
+
+    func on_close(args : IcWebSocketCdk.OnCloseCallbackArgs) : async () {
+        Debug.print("On close called for client: " # debug_show (args));
+        clients_connected := TrieSet.delete(clients_connected, args.client_principal, Principal.hash(args.client_principal), Principal.equal);
+    };
+
+    func send_to_all(msg : AppMessage) : async () {
+        let msg_bytes = to_candid (msg);
+        let clients = TrieSet.toArray(clients_connected);
+        if(clients.size() > 0){
+            for(client in clients.vals()){
+                switch (await IcWebSocketCdk.send(ws_state, client, msg_bytes)) {
+                    case (#Err(_err)) {
+                    };
+                    case (#Ok(_)) {
+                    };
+                };
+            };
+        };
+    };
+
+    func send_app_message(to_principal : Principal, msg : AppMessage) : async () {
+        let msg_bytes = to_candid (msg);
+        switch (await IcWebSocketCdk.send(ws_state, to_principal, msg_bytes)) {
+            case (#Err(_err)) {
+            };
+            case (#Ok(_)) {
+            };
+        };
+    };
+
+    let handlers = IcWebSocketCdkTypes.WsHandlers(
+        ?on_open,
+        ?on_message,
+        ?on_close,
+    );
+
+    let ws = IcWebSocketCdk.IcWebSocket(ws_state, params, handlers);
+
+    // method called by the WS Gateway after receiving FirstMessage from the client
+    public shared ({ caller }) func ws_open(args : IcWebSocketCdk.CanisterWsOpenArguments) : async IcWebSocketCdk.CanisterWsOpenResult {
+        Debug.print("Opening WS connection for client: " # debug_show (caller) # " with args: " # debug_show (args));
+        await ws.ws_open(caller, args);
+    };
+
+    // method called by the Ws Gateway when closing the IcWebSocket connection
+    public shared ({ caller }) func ws_close(args : IcWebSocketCdk.CanisterWsCloseArguments) : async IcWebSocketCdk.CanisterWsCloseResult {
+        Debug.print("Closing WS connection for client: " # debug_show (caller) # " with args: " # debug_show (args));
+        await ws.ws_close(caller, args);
+    };
+
+    // method called by the WS Gateway to send a message of type GatewayMessage to the canister
+    public shared ({ caller }) func ws_message(args : IcWebSocketCdk.CanisterWsMessageArguments, msg_type : ?AppMessage) : async IcWebSocketCdk.CanisterWsMessageResult {
+        Debug.print("Receiving message from client: " # debug_show (caller) # " with args: " # debug_show (args));
+        await ws.ws_message(caller, args, msg_type);
+    };
+
+    // method called by the WS Gateway to get messages for all the clients it serves
+    public shared query ({ caller }) func ws_get_messages(args : IcWebSocketCdk.CanisterWsGetMessagesArguments) : async IcWebSocketCdk.CanisterWsGetMessagesResult {
+        Debug.print("Getting messages from client: " # debug_show (caller));
+        Debug.print("Getting messages with args: " # debug_show (args));
+        let result = ws.ws_get_messages(caller, args);
+        Debug.print("Messages returned: " # debug_show (result));
+        result;
+    };
+
+    //// Debug/tests methods
+    // send a message to the client, usually called by the canister itself
+    // public shared func send(client_principal : IcWebSocketCdk.ClientPrincipal, msg_bytes : Blob) : async IcWebSocketCdk.CanisterSendResult {
+    //     Debug.print("Sending message to client: " # debug_show (client_principal));
+    //     await ws.send(client_principal, msg_bytes);
+    // };
+
+
+
+
+
+
+
+
+
+
+
+
 
     private func _save_to_archive() : async () {
         if(_task_status){

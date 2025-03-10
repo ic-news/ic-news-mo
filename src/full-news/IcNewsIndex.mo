@@ -4,9 +4,10 @@ import Principal "mo:base/Principal";
 import Text "mo:base/Text";
 import Timer "mo:base/Timer";
 import StableTrieMap "mo:StableTrieMap";
-import Types "/types/Types";
+import FullNewsTypes "../types/FullNewsTypes";
+import NewsTypes "../types/NewsTypes";
 
-actor class NewsIndex(news_canister_id: Principal) = this{
+actor class FullNewsIndex(news_canister_id: Principal) = this{
 
     stable let index_store = StableTrieMap.new<Text, (Principal,Nat)>();
 
@@ -15,7 +16,7 @@ actor class NewsIndex(news_canister_id: Principal) = this{
 
     private func _sync_index() : async () {
         // query all news archive canister
-        let news_canister : Types.NewsInterface = actor(Principal.toText(news_canister_id));
+        let news_canister : FullNewsTypes.FullNewsInterface = actor(Principal.toText(news_canister_id));
         let archives = await news_canister.get_archives();  
         //loop all news archive canister
         switch(archives){
@@ -56,17 +57,17 @@ actor class NewsIndex(news_canister_id: Principal) = this{
         };
     };
 
-    public composite query func get_news_by_hash(news_hash: Text): async  Result.Result<Types.News, Types.Error> {
+    public composite query func get_news_by_hash(news_hash: Text): async  Result.Result<FullNewsTypes.FullNews, NewsTypes.Error> {
         let news_index = StableTrieMap.get(index_store, Text.equal, Text.hash, news_hash);
         switch(news_index){
             case null {
                 //query from news canister
-                let news_canister : Types.NewsInterface = actor(Principal.toText(news_canister_id));
+                let news_canister : FullNewsTypes.FullNewsInterface = actor(Principal.toText(news_canister_id));
                 let news = await news_canister.get_news_by_hash(news_hash);
                 return news;
             };
             case (?(archive_id,index)) {
-                let news_from_archive : Types.ArchiveInterface = actor (Principal.toText(archive_id));
+                let news_from_archive : FullNewsTypes.FullArchiveInterface = actor (Principal.toText(archive_id));
                 let news = await news_from_archive.get_news(index);
                 return news;
             };
